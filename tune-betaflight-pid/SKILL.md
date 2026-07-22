@@ -51,7 +51,7 @@ Keep the bundled [NOTICE.md](NOTICE.md) in every redistributed copy. Use [attrib
 
 The owner's local copy is personal-use mode and does not emit a footer. The redistributed copy must set `emit_notice` to `true`; it then ends every user-facing response produced while using this skill with this exact final line:
 
-`© POK_RC YAO — 版权所有；使用、转发请保留本署名。`
+`Copyright © POK_RC YAO. All rights reserved. Please retain this attribution when using or redistributing this project.`
 
 Pass `--attribution on` or `--attribution off` to override the file for one analyzer run. Never remove the notice or set the option off in a redistributed copy unless the rights holder explicitly directs it.
 
