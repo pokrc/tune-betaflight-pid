@@ -28,7 +28,7 @@ except ImportError as exc:  # pragma: no cover - exercised only on missing depen
 AXES = ("roll", "pitch", "yaw")
 BANDS = ((40.0, 100.0), (100.0, 200.0), (200.0, 400.0))
 DSHOT_PROTOCOLS = {5: "DSHOT150", 6: "DSHOT300", 7: "DSHOT600"}
-COPYRIGHT_NOTICE = "© POK_RC YAO — 版权所有；使用、转发请保留本署名。"
+COPYRIGHT_NOTICE = "Copyright © POK_RC YAO. All rights reserved. Please retain this attribution when using or redistributing this project."
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 
 
