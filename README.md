@@ -1,34 +1,38 @@
 # Tune Betaflight PID from Blackbox Logs
 
-**从 Betaflight 黑盒日志到可审计 CLI 的 Codex Skill**
+**An evidence-first Codex skill for turning Betaflight Blackbox data into a reviewable tuning CLI.**
 
 [![GitHub stars](https://img.shields.io/github/stars/pokrc/tune-betaflight-pid?style=social)](https://github.com/pokrc/tune-betaflight-pid/stargazers)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-orange)](LICENSE.md)
 [![Betaflight](https://img.shields.io/badge/Betaflight-4.4%2F4.5-blue)](https://betaflight.com/)
+[![Companion platform](https://img.shields.io/badge/POKRION-companion%20project-7b61ff)](https://github.com/pokrc/POKRION-Speed-Drone)
 
-把 `.bbl` 飞行数据交给 Codex，得到一份有证据、有安全门槛、可复查的 Betaflight 调参候选 CLI。它面向真实飞行中的共振、飞行声响、电机发热、D-term 噪声、RPM 滤波验证和前后日志对比。
+Give Codex one or more Betaflight Blackbox `.bbl` logs and receive an auditable analysis plus a conservative, staged CLI candidate for PID, D-term/gyro filtering, dynamic notch, RPM filtering, and TPA decisions.
 
-> **定位：辅助决策，不是“一键万能预设”。** 输出必须结合机架、桨叶、电机、固件、飞行环境和电机温度进行短距离验证。
+This tool is designed for real symptoms—resonance, noisy flight sound, hot motors, D-term noise, suspicious RPM filtering, and before/after flight comparisons. It is a decision aid, not a universal preset: every output must be reviewed against the actual frame, propellers, motors, ESC firmware, battery, firmware version, and motor temperature.
 
-## 为什么值得使用
+## What makes it different
 
-- **从数据出发**：读取黑盒日志中的固件、飞行窗口、频谱、陀螺仪/D-term RMS、油门和电机饱和信息。
-- **先过安全门**：没有稳定飞行窗口、日志被撞击/失控保护占满、固件不在验证范围内时，不强行生成调参命令。
-- **关注 RPM 证据**：不会仅凭 `dshot_bidir=ON` 就声称 RPM 滤波已经生效；需要活动电机 eRPM 或调试相关性支持。
-- **渐进式调整**：优先给出一组可解释的阶段性改动，保留 I 项和前馈，避免用错误的“电机输出限制”掩盖 PID 问题。
-- **适合复盘**：同时产出 `analysis.json` 与 `recommended_cli.txt`，方便保存、比较和回滚。
+- **Evidence before edits.** Reads firmware, craft/configuration context, stable flight windows, spectra, filtered gyro and D-term RMS, throttle, and motor saturation.
+- **Hard safety gates.** Refuses to imply a tune when the log lacks a stable window, is dominated by impacts/failsafe/landing transients, or falls outside the verified Betaflight 4.4/4.5 family.
+- **RPM proof, not RPM assumptions.** `dshot_bidir = ON` alone is not treated as proof that RPM filtering works; active eRPM and, where available, debug correlation are required.
+- **Small, explainable steps.** Preserves I-term and feedforward by default and changes one parameter family per short test flight.
+- **Reproducible reports.** Produces machine-readable evidence and a paste-ready candidate with comments, provenance, and the final `save` only when gates pass.
+- **Safe sharing mode.** The distributed copy retains the required POK_RC YAO attribution in generated user-facing output.
 
-## 快速开始
+## Quick start in Codex
 
-将本仓库中的 `tune-betaflight-pid/` 复制到 Codex skills 目录，然后在 Codex 中调用：
+Copy the `tune-betaflight-pid/` directory into your Codex skills directory, then invoke it with:
 
 ```text
 Use $tune-betaflight-pid to analyze this Betaflight .bbl and produce a staged CLI.
 ```
 
-本 Skill 适用于 Betaflight 4.4/4.5 多旋翼。分析器需要 Python、NumPy，以及可用的 `blackbox_decode`；如果已经有解码后的 CSV，则不需要解码器。
+For the best result, attach the `.bbl`, the relevant `diff all` backup, Betaflight version, board and craft details, motor/propeller/battery information, and a short description of the symptom. A matched baseline log can be supplied for before/after analysis.
 
-## 命令行分析
+## Command-line workflow
+
+The bundled analyzer needs Python with NumPy and an external `blackbox_decode` executable. If you already have a decoded CSV, the decoder is not needed.
 
 ```bash
 cd tune-betaflight-pid
@@ -37,7 +41,7 @@ python scripts/analyze_bbl.py flight.bbl \
   --output-dir /absolute/path/to/analysis
 ```
 
-用基线日志做匹配窗口对比：
+Compare a new flight with a matched baseline:
 
 ```bash
 cd tune-betaflight-pid
@@ -47,48 +51,80 @@ python scripts/analyze_bbl.py new-flight.bbl \
   --output-dir /absolute/path/to/analysis
 ```
 
-先阅读 `analysis.json`，再复制 `recommended_cli.txt`。提交 CLI 前请保存飞控备份：
+The analyzer supports explicit attribution control for local testing:
 
-```text
-diff all
+```bash
+python scripts/analyze_bbl.py flight.bbl --attribution auto
+python scripts/analyze_bbl.py flight.bbl --attribution on
 ```
 
-配置工作时拆除桨叶；实际测试使用状态良好的桨叶，并一次只改变一类参数。
+The redistributed configuration uses `emit_notice: true`. Do not remove the notice from a redistributed copy without written permission from the rights holder.
 
-## 输出内容
+## Output contract
 
-| 文件 | 用途 |
+| Output | Purpose |
 | --- | --- |
-| `analysis.json` | 日志来源、配置快照、质量门槛、频谱、RPM 证据、事件和调参决定 |
-| `recommended_cli.txt` | 带注释的阶段性 CLI；通过硬门槛时才以 `save` 结束 |
+| `analysis.json` | Provenance, configuration snapshot, quality gates, stable windows, spectra, D-term levels, RPM evidence, motor saturation, incidents, comparison, and decision |
+| `recommended_cli.txt` | A commented, staged Betaflight CLI candidate; when automatic-tuning gates fail, it emits comments and does not pretend that an empty `save` is a tune |
 
-重点报告包括：
+Every report should state:
 
-- 固件/飞控/机体与有效日志时长
-- RPM 遥测：已确认、仅配置或缺失
-- 40–400 Hz 滤波陀螺仪与 D-term RMS
-- 电机饱和比例、油门窗口和排除的撞击/降落事件
-- 有基线时的同窗口前后变化
-- 每个参数的改动理由、下一次测试的中止条件
+- firmware, board/craft, and usable log duration;
+- whether RPM telemetry is confirmed, configured but unverified, or absent;
+- representative and worst filtered gyro/D-term RMS in the relevant band;
+- motor saturation, throttle windows, and excluded impacts or landing events;
+- matched-window change when a baseline is supplied;
+- exact parameter deltas, rationale, and next-flight abort conditions.
 
-## 安全边界
+## Required safety workflow
 
-请勿在未装桨的 ARM 测试中判断最终 PID；电机页是开环测试，不能代表真实的姿态反馈回路。只有在 ESC 支持且电机极数正确时，才允许启用双向 DShot。出现异常声响、明显发热、持续振荡或控制失效时立即降落并断电。
+1. Remove propellers before configuration work and save a rollback backup with `diff all`.
+2. Confirm the log came from a prop-fitted flight; a prop-less ARM test cannot validate the final tune.
+3. Confirm ESC support and correct `motor_poles` before enabling bidirectional DShot/RPM filtering.
+4. Apply one parameter family at a time and make a short, controlled test flight.
+5. Land immediately for abnormal oscillation, sound, current, motor temperature, control response, or failsafe behavior.
+6. Keep the previous CLI and flight log so every change can be reversed and compared.
 
-更多调参规则见 [`references/decision-rules.md`](tune-betaflight-pid/references/decision-rules.md) 和 [`references/cli-rules.md`](tune-betaflight-pid/references/cli-rules.md)。
+The Motors tab is an open-loop check. It cannot reproduce the closed-loop gyro/PID/motor interaction of an aircraft in flight. Never use `motor_output_limit` as a substitute for diagnosing saturation or PID problems.
 
-## 参与与支持
+## Decision boundaries
 
-如果这个 Skill 帮你更快定位共振、验证 RPM 滤波或减少电机发热，欢迎给仓库点一个 **Star**，并分享你的 Betaflight 版本、日志质量和验证结果：
+The skill will not automatically tune when:
+
+- no stable low-command flight window exists;
+- required gyro or D-term fields are missing;
+- the firmware is outside the verified 4.4/4.5 family;
+- the log is dominated by impacts, prop strikes, failsafe, or terminal landing transients;
+- RPM telemetry is unverified and the proposed change would open filters or raise D;
+- the evidence is insufficient to distinguish mechanical vibration from control-loop instability.
+
+When a clean log shows a stable tune, the correct recommendation may be **no PID change**. Temperature and flight-envelope validation are more useful than forcing another edit.
+
+## Repository guide
+
+- [`tune-betaflight-pid/SKILL.md`](tune-betaflight-pid/SKILL.md) — full Codex workflow and output contract
+- [`tune-betaflight-pid/scripts/analyze_bbl.py`](tune-betaflight-pid/scripts/analyze_bbl.py) — local analyzer
+- [`tune-betaflight-pid/references/decision-rules.md`](tune-betaflight-pid/references/decision-rules.md) — evidence and safety decisions
+- [`tune-betaflight-pid/references/cli-rules.md`](tune-betaflight-pid/references/cli-rules.md) — Betaflight CLI rules and compatibility notes
+- [`NOTICE.md`](NOTICE.md) — required attribution notice
+- [`LICENSE.md`](LICENSE.md) — PolyForm Noncommercial terms
+
+## Companion project: POKRION
+
+This skill was developed alongside the **[POKRION High-Speed Micro Quadcopter Platform](https://github.com/pokrc/POKRION-Speed-Drone)**. POKRION provides the airframe, manufacturing, propulsion, and flight-test context; this repository provides a repeatable Blackbox-to-PID analysis workflow. The two projects are useful together, but each can be used independently.
+
+## Contribute and share
+
+If this skill helps you find resonance, validate RPM filtering, reduce motor heat, or make a safer tuning decision, please give it a voluntary **Star** and share a reproducible result:
 
 <https://github.com/pokrc/tune-betaflight-pid>
 
-Issue/PR 建议附上脱敏后的结论、固件版本和复现步骤；不要上传遥控器绑定信息、个人凭据或 GitHub Token。
+Issues and pull requests are welcome. Include Betaflight version, board, relevant hardware, test conditions, log-quality notes, and the smallest reproducible change. Never upload GitHub tokens, receiver identifiers, private flight data, or other credentials.
 
-## 许可与署名
+## License and attribution
 
-本项目采用 [PolyForm Noncommercial 1.0.0](LICENSE.md)。未经另行书面许可，禁止商业使用。再发布时必须保留 [`NOTICE.md`](NOTICE.md) 和 Skill 内的署名配置；生成的分享模式输出会保留固定署名：
+This project is licensed under [PolyForm Noncommercial 1.0.0](LICENSE.md). Commercial use is prohibited without separate written permission. Redistributed copies must retain [`NOTICE.md`](NOTICE.md), the bundled attribution configuration, and the attribution behavior in the skill.
+
+Betaflight and Blackbox Tools are separate third-party projects. This repository does not claim ownership of their code or trademarks.
 
 `© POK_RC YAO — 版权所有；使用、转发请保留本署名。`
-
-本项目独立于 Betaflight 与 Blackbox Tools，不主张其代码或商标权利。
