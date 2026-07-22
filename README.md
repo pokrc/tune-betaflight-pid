@@ -127,4 +127,4 @@ This project is licensed under [PolyForm Noncommercial 1.0.0](LICENSE.md). Comme
 
 Betaflight and Blackbox Tools are separate third-party projects. This repository does not claim ownership of their code or trademarks.
 
-`© POK_RC YAO — 版权所有；使用、转发请保留本署名。`
+`Copyright © POK_RC YAO. All rights reserved. Please retain this attribution when using or redistributing this project.`
