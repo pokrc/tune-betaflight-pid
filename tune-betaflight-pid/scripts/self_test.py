@@ -53,6 +53,16 @@ def result(gyro: float, dterm: float, rpm: str, high_dterm: float | None = None)
 
 def main() -> None:
     analyzer = load_analyzer()
+
+    no_window = {
+        "stable_windows": {"count": 0},
+        "high_throttle_windows": {"count": 0},
+        "rpm_telemetry": {"classification": "confirmed"},
+        "logs": [],
+    }
+    cli, decision = analyzer.cli_candidate(headers(), no_window, False)
+    assert decision["mode"] == "hold" and "\nsave\n" not in cli
+
     cli, decision = analyzer.cli_candidate(headers(), result(1, 3, "confirmed"), False)
     assert decision["mode"] == "retain" and "set p_roll" not in cli
 
