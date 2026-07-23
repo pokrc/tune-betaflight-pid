@@ -70,7 +70,15 @@ def main() -> None:
     assert decision["mode"] == "rpm_validation" and "set d_roll" not in cli
 
     cli, decision = analyzer.cli_candidate(headers(), result(30, 100, "absent"), False, esc_bidir_confirmed=True)
-    assert decision["mode"] == "rpm_setup" and "set dshot_bidir = ON" in cli and "set d_roll" not in cli
+    assert decision["mode"] == "rpm_validation" and "set dshot_bidir = ON" not in cli
+
+    cli, decision = analyzer.cli_candidate(
+        headers(), result(30, 100, "absent"), False,
+        esc_bidir_confirmed=True, motor_poles_confirmed=14,
+    )
+    assert decision["mode"] == "rpm_setup"
+    assert "set dshot_bidir = ON" in cli and "set motor_poles = 14" in cli
+    assert "set d_roll" not in cli and "set debug_mode = RPM_FILTER" not in cli
 
     cli, decision = analyzer.cli_candidate(headers(), result(14, 45, "confirmed", high_dterm=110), False)
     assert decision["mode"] == "noise_reduction" and "set d_roll" in cli and "set tpa_rate = 65" in cli

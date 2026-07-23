@@ -19,18 +19,19 @@ Turn one or more `.bbl` logs into an auditable analysis and an adaptive, paste-r
      --output-dir /absolute/path/to/analysis
    ```
 
-   Add `--decoder /absolute/path/to/blackbox_decode` only when automatic local discovery cannot find it. Add `--baseline previous.bbl` for a matched before/after comparison. Pass several new logs positionally when they share the same configuration. Use `--print-cli` only when direct standard-output CLI is needed. Only pass `--esc-bidir-confirmed` when the operator has independently confirmed compatible ESC firmware and the actual rotor magnet count.
+   Add `--decoder /absolute/path/to/blackbox_decode` only when automatic local discovery cannot find it. Add `--baseline previous.bbl` for a matched before/after comparison. Pass several new logs positionally when they share the same configuration. Use `--print-cli` only when direct standard-output CLI is needed. RPM setup requires both `--esc-bidir-confirmed` and `--motor-poles-confirmed <bell-magnet-count>` after independent verification.
 5. Read `analysis.json` before presenting `recommended_cli.txt`. Inspect `quality`, `rpm_telemetry`, `stable_windows`, `high_throttle_windows`, `incidents`, `comparison`, and `decision.mode`.
 6. Read [references/decision-rules.md](references/decision-rules.md) whenever deciding whether the automatic candidate is safe to apply or needs manual revision.
 7. Read [references/cli-rules.md](references/cli-rules.md) before modifying or presenting the CLI, especially for a firmware version other than Betaflight 4.4/4.5.
-8. Read [references/human-tuning-playbook.md](references/human-tuning-playbook.md) before changing the adaptive policy or explaining PID decisions. It encodes bounded human-tuning patterns and automation invariants.
-9. Return the CLI together with the evidence that caused each changed parameter. State explicitly when the correct result is `retain`, `rpm_validation`, or “no PID change.”
+8. Read [references/betaflight-4.5-cli-compatibility.md](references/betaflight-4.5-cli-compatibility.md) before emitting an RPM setup or direct PID/filter stage for Betaflight 4.5.
+9. Read [references/human-tuning-playbook.md](references/human-tuning-playbook.md) before changing the adaptive policy or explaining PID decisions. It encodes bounded human-tuning patterns and automation invariants.
+10. Return the CLI together with the evidence that caused each changed parameter. State explicitly when the correct result is `retain`, `rpm_validation`, or “no PID change.”
 
 ## Adaptive modes
 
 - `hold`: no active CLI; one or more hard evidence/version fields failed.
 - `rpm_validation`: no PID/filter edit; first obtain valid RPM evidence.
-- `rpm_setup`: telemetry-only CLI, available only after explicit `--esc-bidir-confirmed`.
+- `rpm_setup`: telemetry-only CLI, available only after explicit ESC compatibility and motor-bell magnet-count confirmation.
 - `retain`: clean accepted windows; no active CLI is the intended output.
 - `tpa_only`: high-throttle D energy is materially worse than matched low-command energy; edit TPA only.
 - `noise_reduction`: RPM-confirmed, accepted low-command noise is moderate/severe; issue one bounded P/D/filter stage and require a new BBL.
@@ -38,7 +39,7 @@ Turn one or more `.bbl` logs into an auditable analysis and an adaptive, paste-r
 ## Hard gates
 
 - Refuse active automatic tuning when no stable low-command flight window exists, required gyro/D-term fields are missing, the firmware is outside the verified 4.4/4.5 family, or the log is dominated by impacts/failsafe/landing events.
-- Do not enable bidirectional DShot unless the ESC firmware supports it and `motor_poles` is correct. If the log cannot prove this, keep the analyzer's compatibility warning in the handoff.
+- Do not enable bidirectional DShot unless the ESC firmware supports it and `motor_poles` is explicitly supplied from the actual motor-bell magnet count. The RPM setup stage never infers poles from a log and never persistently enables `debug_mode=RPM_FILTER`.
 - Do not claim RPM filtering works from `dshot_bidir=ON` alone. Require nonzero eRPM during active motor operation; prefer `RPM_FILTER` debug correlation when present.
 - Exclude impacts, prop strikes, and terminal landing transients from steady-flight spectra and heat/PID conclusions. Preserve them as incident findings.
 - Never use `motor_output_limit` as PID “headroom,” never raise dynamic idle merely to hide noise, and never open filters or raise D until RPM telemetry and motor-temperature gates pass.
@@ -54,7 +55,7 @@ Produce:
 - `analysis.json`: decoded-log provenance including decoder path/discovery, configuration snapshot, quality gates, spectra, D-term levels, motor saturation, RPM telemetry, incidents, comparison, decision mode, confidence, baseline trend, and parameter deltas.
 - `recommended_cli.txt`: comments plus exactly one active stage when justified. `hold`, `rpm_validation`, and `retain` intentionally contain no active tuning command. An active stage ends with `save`.
 
-If telemetry is unverified, emit `rpm_validation` by default. Use `rpm_setup` only after the operator explicitly confirms ESC compatibility. If the new log is clean, emit `retain` and move to temperature and flight-envelope validation instead of forcing another parameter change.
+If telemetry is unverified, emit `rpm_validation` by default. Use `rpm_setup` only after the operator passes both explicit ESC compatibility and motor-pole confirmation. If the new log is clean, emit `retain` and move to temperature and flight-envelope validation instead of forcing another parameter change.
 
 ## Attribution and sharing
 

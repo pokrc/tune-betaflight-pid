@@ -32,7 +32,7 @@ Use $tune-betaflight-pid to analyze this Betaflight .bbl and produce a staged CL
 
 For the best result, attach the `.bbl`, the relevant `diff all` backup, Betaflight version, board and craft details, motor/propeller/battery information, and a short description of the symptom. A matched baseline log can be supplied for before/after analysis.
 
-The skill automatically chooses the safest supported mode. It does **not** enable bidirectional DShot from a log alone. Supply `--esc-bidir-confirmed` only after independently confirming ESC firmware support and the actual motor-pole count.
+The skill automatically chooses the safest supported mode. It does **not** enable bidirectional DShot from a log alone. RPM setup requires both `--esc-bidir-confirmed` and `--motor-poles-confirmed <bell-magnet-count>` after independently confirming ESC firmware support and counting magnets on the motor bell.
 
 ## Local deployment
 
@@ -76,6 +76,16 @@ Print the generated CLI directly to standard output when integrating with a loca
   --print-cli
 ```
 
+An RPM setup stage is deliberately stricter than a PID stage. For example, after confirming ESC support and counting 14 magnets on the actual motor bell, use:
+
+```bash
+.venv/bin/python tune-betaflight-pid/scripts/analyze_bbl.py flight.bbl \
+  --output-dir /absolute/path/to/analysis \
+  --esc-bidir-confirmed --motor-poles-confirmed 14
+```
+
+Do not copy `14` as a universal value. The generated RPM stage does not alter the existing DShot protocol and does not leave `debug_mode=RPM_FILTER` enabled; that debug mode is optional and temporary.
+
 The analyzer supports explicit attribution control for local testing:
 
 ```bash
@@ -91,12 +101,12 @@ The redistributed configuration uses `emit_notice: true`. Do not remove the noti
 | --- | --- | --- |
 | `hold` | Stops because a firmware, field, or stable-window gate failed | No |
 | `rpm_validation` | Requires eRPM/RPM-filter evidence before PID/filter work | No |
-| `rpm_setup` | Generates a telemetry-only stage after explicit ESC confirmation | Yes |
+| `rpm_setup` | Generates a telemetry-only stage after explicit ESC and motor-bell magnet-count confirmation | Yes |
 | `retain` | Keeps a clean, RPM-confirmed tune unchanged | No |
 | `tpa_only` | Changes TPA only when high-throttle D energy is at least 2x the low-command value | Yes |
 | `noise_reduction` | Applies one bounded P/D/filter stage for RPM-confirmed noise | Yes |
 
-“Fully automatic” means automatic evidence classification and bounded stage generation. It never raises P/D or filter cutoffs, silently changes motor limits, or combines RPM setup with a PID/filter change.
+“Fully automatic” means automatic evidence classification and bounded stage generation. It never raises P/D or filter cutoffs, silently changes motor limits, infers motor poles, leaves debug mode enabled, or combines RPM setup with a PID/filter change.
 
 ## Output contract
 
@@ -146,6 +156,7 @@ When a clean log shows a stable tune, the correct recommendation may be **no PID
 - [`tune-betaflight-pid/scripts/runtime.py`](tune-betaflight-pid/scripts/runtime.py) — portable decoder-discovery helper
 - [`tune-betaflight-pid/references/decision-rules.md`](tune-betaflight-pid/references/decision-rules.md) — evidence and safety decisions
 - [`tune-betaflight-pid/references/cli-rules.md`](tune-betaflight-pid/references/cli-rules.md) — Betaflight CLI rules and compatibility notes
+- [`tune-betaflight-pid/references/betaflight-4.5-cli-compatibility.md`](tune-betaflight-pid/references/betaflight-4.5-cli-compatibility.md) — official BF 4.5 command semantics, ranges, and generated-command policy
 - [`tune-betaflight-pid/references/human-tuning-playbook.md`](tune-betaflight-pid/references/human-tuning-playbook.md) — PID principles and the bounded adaptive policy
 - [`tune-betaflight-pid/scripts/self_test.py`](tune-betaflight-pid/scripts/self_test.py) — deterministic tests for all adaptive decision modes
 - [`requirements.txt`](requirements.txt) — minimal local runtime dependency

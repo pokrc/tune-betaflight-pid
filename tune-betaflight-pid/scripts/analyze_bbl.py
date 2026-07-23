@@ -624,6 +624,7 @@ def cli_candidate(
     emit_notice: bool,
     baseline: dict | None = None,
     esc_bidir_confirmed: bool = False,
+    motor_poles_confirmed: int | None = None,
 ) -> tuple[str, dict]:
     severity, reasons = classify(result["stable_windows"])
     supported = firmware_supported(headers)
@@ -640,10 +641,11 @@ def cli_candidate(
     noise = summary_max(result["stable_windows"], "worst_p90_filtered_40_400_rms_dps") or 0.0
     dterm = summary_max(result["stable_windows"], "worst_p90_d_rms") or 0.0
     hard_gate = not supported or severity == "insufficient_data" or not pid_headers_present
+    motor_poles_valid = motor_poles_confirmed is not None and 4 <= motor_poles_confirmed <= 255
     if hard_gate:
         mode = "hold"
     elif rpm_class != "confirmed":
-        mode = "rpm_setup" if esc_bidir_confirmed and hardware_protocol in DSHOT_PROTOCOLS else "rpm_validation"
+        mode = "rpm_setup" if esc_bidir_confirmed and motor_poles_valid and hardware_protocol in DSHOT_PROTOCOLS else "rpm_validation"
     elif severity == "clean":
         mode = "tpa_only" if high_d_ratio is not None and high_d_ratio >= 2.0 else "retain"
     else:
@@ -657,6 +659,13 @@ def cli_candidate(
         "active_cli_emitted": active_cli,
         "rpm_telemetry": rpm_class,
         "requires_esc_bidirectional_dshot_confirmation": mode in {"rpm_validation", "rpm_setup"},
+        "requires_motor_poles_confirmation": mode in {"rpm_validation", "rpm_setup"},
+        "rpm_setup_prerequisites": {
+            "esc_bidir_confirmed": esc_bidir_confirmed,
+            "motor_poles_confirmed": motor_poles_confirmed,
+            "motor_poles_valid": motor_poles_valid,
+            "existing_dshot_protocol": DSHOT_PROTOCOLS.get(hardware_protocol),
+        },
         "confidence": confidence,
         "confidence_reasons": confidence_reasons,
         "baseline_trend": trend,
@@ -688,8 +697,10 @@ def cli_candidate(
     if mode == "rpm_validation":
         lines += [
             "# STAGE 1 ONLY: PID and filter changes are withheld until RPM telemetry is confirmed.",
-            "# Confirm ESC bidirectional-DShot support and the actual rotor magnet count, then rerun with --esc-bidir-confirmed.",
-            "# If bidirectional DShot is already configured, log a short prop-on flight with eRPM and RPM_FILTER debug fields.",
+            "# Confirm ESC bidirectional-DShot support and count the magnets on the motor bell, not the stator.",
+            "# Then rerun with --esc-bidir-confirmed --motor-poles-confirmed <bell-magnet-count>.",
+            "# If bidirectional DShot is already configured, log a short prop-on flight with nonzero eRPM.",
+            "# RPM_FILTER debug is optional; use it only temporarily and reset debug_mode to NONE afterward.",
             "# No active tuning commands follow.",
         ]
         if emit_notice:
@@ -697,19 +708,22 @@ def cli_candidate(
         return "\n".join(lines) + "\n", decision
 
     if mode == "rpm_setup":
+        assert motor_poles_confirmed is not None
         lines += [
             "# STAGE 1: ESC compatibility was explicitly confirmed by the operator.",
             "# This stage only enables/verifies RPM telemetry; it does not change PID or filters.",
-            f"set motor_pwm_protocol = {DSHOT_PROTOCOLS[hardware_protocol]}",
+            f"# Existing motor protocol from the log: {DSHOT_PROTOCOLS[hardware_protocol]}; it is already DShot and is not changed.",
             "set dshot_bidir = ON",
-            f"set motor_poles = {int_header(headers, 'motor_poles', 14)}",
+            f"set motor_poles = {motor_poles_confirmed}",
             "set rpm_filter_harmonics = 3",
-            "set debug_mode = RPM_FILTER",
-            "# Reboot, check dshot_telemetry_info with props removed, then record a prop-on BBL before further tuning.",
+            "# With props removed: power-cycle FC and ESC, then verify all motors report RPM with <=1% error in the Motors tab.",
+            "# Record a prop-on BBL with nonzero eRPM before further tuning.",
+            "# Do not leave debug_mode=RPM_FILTER enabled; it is an optional temporary diagnostic only.",
             "save",
         ]
         for name, old, new in (
             ("dshot_bidir", int_header(headers, "dshot_bidir"), 1),
+            ("motor_poles", int_header(headers, "motor_poles", 14), motor_poles_confirmed),
             ("rpm_filter_harmonics", int_header(headers, "rpm_filter_harmonics"), 3),
         ):
             if old != new:
@@ -744,6 +758,7 @@ def cli_candidate(
         lines += [
             "",
             "# RPM telemetry is confirmed. Apply one evidence-based noise-reduction stage, then collect a new BBL.",
+            "# Betaflight 4.5 dynamic damping: d_roll/d_pitch are D Max; d_min_roll/d_min_pitch are base D.",
             "# Use direct values; do not run 'simplified_tuning apply' after this block.",
             "set simplified_pids_mode = OFF",
             "set simplified_dterm_filter = OFF",
@@ -842,8 +857,14 @@ def main() -> None:
     parser.add_argument("--attribution", choices=("auto", "on", "off"), default="auto",
                         help="Output attribution: auto reads attribution.json; on/off overrides it")
     parser.add_argument("--esc-bidir-confirmed", action="store_true",
-                        help="Operator confirms ESC firmware supports bidirectional DShot; permits telemetry-only stage 1 when eRPM is unverified")
+                        help="Operator confirms ESC firmware supports bidirectional DShot")
+    parser.add_argument("--motor-poles-confirmed", type=int, metavar="COUNT",
+                        help="Actual motor-bell magnet count (4-255); required with --esc-bidir-confirmed for RPM setup")
     args = parser.parse_args()
+    if args.motor_poles_confirmed is not None and not 4 <= args.motor_poles_confirmed <= 255:
+        parser.error("--motor-poles-confirmed must be between 4 and 255")
+    if args.motor_poles_confirmed is not None and not args.esc_bidir_confirmed:
+        parser.error("--motor-poles-confirmed requires --esc-bidir-confirmed")
 
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -859,7 +880,14 @@ def main() -> None:
     baseline = aggregate(baseline_logs) if baseline_logs else None
     headers = new_logs[0].headers
     emit_notice = attribution_enabled(args.attribution)
-    cli, decision = cli_candidate(headers, current, emit_notice, baseline, args.esc_bidir_confirmed)
+    cli, decision = cli_candidate(
+        headers,
+        current,
+        emit_notice,
+        baseline,
+        args.esc_bidir_confirmed,
+        args.motor_poles_confirmed,
+    )
     payload = {
         "schema_version": 2,
         "inputs": [str(Path(x).expanduser().resolve()) for x in args.inputs],
@@ -881,6 +909,7 @@ def main() -> None:
             "yaw_pid": parse_triplet(headers.get("yawPID")),
             "d_min": parse_triplet(headers.get("d_min")),
             "esc_bidir_confirmed_by_operator": args.esc_bidir_confirmed,
+            "motor_poles_confirmed_by_operator": args.motor_poles_confirmed,
         },
         "quality": {
             "firmware_supported_for_automatic_cli": firmware_supported(headers),
