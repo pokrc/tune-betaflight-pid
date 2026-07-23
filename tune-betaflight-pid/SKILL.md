@@ -10,17 +10,16 @@ Turn one or more `.bbl` logs into an auditable analysis and an adaptive, paste-r
 ## Workflow
 
 1. Confirm that props were fitted for the logged flight. Never judge the final PID tune from a prop-less ARM test: the Motors tab is open-loop, while ARM/Airmode closes the gyro-PID-motor feedback loop.
-2. Locate `blackbox_decode`. Prefer an existing executable in `PATH`, the workspace, or a locally built Betaflight Blackbox Tools checkout. Do not download or build it unless the user authorizes that expansion.
+2. Run `scripts/doctor.py` for raw `.bbl` input. It checks NumPy and discovers `blackbox_decode` through an explicit path, `BLACKBOX_DECODE`, `PATH`, conventional local prefixes, or predictable workspace layouts. If it reports `action_required`, state the exact missing prerequisite; do not download or build software unless the user authorizes it.
 3. Locate a Python runtime with NumPy. In Codex Desktop, call `codex_app__load_workspace_dependencies` when needed; do not install packages into the user's environment without permission.
 4. Run the bundled analyzer. Its default policy is `auto`: it selects `hold`, `rpm_validation`, `rpm_setup`, `retain`, `tpa_only`, or `noise_reduction` from the evidence.
 
    ```bash
    <python-with-numpy> scripts/analyze_bbl.py flight.bbl \
-     --decoder /absolute/path/to/blackbox_decode \
      --output-dir /absolute/path/to/analysis
    ```
 
-   Add `--baseline previous.bbl` for a matched before/after comparison. Pass several new logs positionally when they share the same configuration. Only pass `--esc-bidir-confirmed` when the operator has independently confirmed compatible ESC firmware and the actual rotor magnet count.
+   Add `--decoder /absolute/path/to/blackbox_decode` only when automatic local discovery cannot find it. Add `--baseline previous.bbl` for a matched before/after comparison. Pass several new logs positionally when they share the same configuration. Use `--print-cli` only when direct standard-output CLI is needed. Only pass `--esc-bidir-confirmed` when the operator has independently confirmed compatible ESC firmware and the actual rotor magnet count.
 5. Read `analysis.json` before presenting `recommended_cli.txt`. Inspect `quality`, `rpm_telemetry`, `stable_windows`, `high_throttle_windows`, `incidents`, `comparison`, and `decision.mode`.
 6. Read [references/decision-rules.md](references/decision-rules.md) whenever deciding whether the automatic candidate is safe to apply or needs manual revision.
 7. Read [references/cli-rules.md](references/cli-rules.md) before modifying or presenting the CLI, especially for a firmware version other than Betaflight 4.4/4.5.
@@ -52,7 +51,7 @@ Turn one or more `.bbl` logs into an auditable analysis and an adaptive, paste-r
 
 Produce:
 
-- `analysis.json`: decoded-log provenance, configuration snapshot, quality gates, spectra, D-term levels, motor saturation, RPM telemetry, incidents, comparison, decision mode, confidence, baseline trend, and parameter deltas.
+- `analysis.json`: decoded-log provenance including decoder path/discovery, configuration snapshot, quality gates, spectra, D-term levels, motor saturation, RPM telemetry, incidents, comparison, decision mode, confidence, baseline trend, and parameter deltas.
 - `recommended_cli.txt`: comments plus exactly one active stage when justified. `hold`, `rpm_validation`, and `retain` intentionally contain no active tuning command. An active stage ends with `save`.
 
 If telemetry is unverified, emit `rpm_validation` by default. Use `rpm_setup` only after the operator explicitly confirms ESC compatibility. If the new log is clean, emit `retain` and move to temperature and flight-envelope validation instead of forcing another parameter change.
