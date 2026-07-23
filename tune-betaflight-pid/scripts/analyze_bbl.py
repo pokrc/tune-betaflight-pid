@@ -892,7 +892,10 @@ def main() -> None:
         "analysis": str(analysis_path),
         "cli": str(cli_path),
         "classification": decision["classification"],
+        "mode": decision["mode"],
         "automatic_cli_applicable": decision["automatic_cli_applicable"],
+        "active_cli_emitted": decision["active_cli_emitted"],
+        "requires_new_bbl": decision["requires_new_bbl"],
         "rpm_telemetry": decision["rpm_telemetry"],
     }
     if emit_notice:
