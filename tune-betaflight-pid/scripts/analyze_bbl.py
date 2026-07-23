@@ -535,7 +535,93 @@ def scaled(value: int, factor: float, minimum: int = 0) -> int:
     return max(minimum, int(round(value * factor)))
 
 
-def cli_candidate(headers: dict[str, str], result: dict, emit_notice: bool) -> tuple[str, dict]:
+def clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
+
+
+def summary_max(summary: dict, key: str) -> float | None:
+    values = [value_from_summary(summary, axis, key) for axis in ("roll", "pitch")]
+    values = [float(value) for value in values if value is not None and math.isfinite(float(value))]
+    return max(values) if values else None
+
+
+def high_throttle_d_ratio(result: dict) -> float | None:
+    low = summary_max(result.get("stable_windows", {}), "worst_p90_d_rms")
+    high = summary_max(result.get("high_throttle_windows", {}), "worst_p90_d_rms")
+    if low is None or high is None or low <= 0:
+        return None
+    return round(high / low, 3)
+
+
+def baseline_trend(current: dict, baseline: dict | None) -> dict:
+    """Summarize matched low-command risk without treating unlike flights as ground truth."""
+    if baseline is None:
+        return {"available": False, "classification": "no_baseline"}
+    current_noise = summary_max(current.get("stable_windows", {}), "worst_p90_filtered_40_400_rms_dps")
+    current_dterm = summary_max(current.get("stable_windows", {}), "worst_p90_d_rms")
+    baseline_noise = summary_max(baseline.get("stable_windows", {}), "worst_p90_filtered_40_400_rms_dps")
+    baseline_dterm = summary_max(baseline.get("stable_windows", {}), "worst_p90_d_rms")
+    if None in (current_noise, current_dterm, baseline_noise, baseline_dterm) or baseline_noise <= 0 or baseline_dterm <= 0:
+        return {"available": False, "classification": "insufficient_matched_metrics"}
+    noise_ratio = current_noise / baseline_noise
+    dterm_ratio = current_dterm / baseline_dterm
+    worst_ratio = max(noise_ratio, dterm_ratio)
+    if worst_ratio >= 1.25:
+        classification = "regressed"
+    elif worst_ratio <= 0.85:
+        classification = "improved"
+    else:
+        classification = "similar"
+    return {
+        "available": True,
+        "classification": classification,
+        "noise_ratio": round(noise_ratio, 3),
+        "dterm_ratio": round(dterm_ratio, 3),
+        "comparison_scope": "p90 accepted low-command windows; confirm matched throttle and maneuver envelope",
+    }
+
+
+def adaptive_factors(severity: str, noise: float, dterm: float, trend: dict) -> tuple[float, float, list[str]]:
+    """Encode bounded human-tuning reductions; never use this to raise P or D automatically."""
+    reasons: list[str] = []
+    if severity == "moderate":
+        risk = clamp(max(noise / 8.0, dterm / 25.0), 0.0, 1.0)
+        p_factor = clamp(0.985 - 0.035 * risk, 0.95, 0.975)
+        d_factor = clamp(0.96 - 0.06 * risk, 0.90, 0.94)
+        reasons.append("Moderate low-command noise: use a bounded proportional D reduction and a smaller P reduction.")
+    elif severity == "severe":
+        risk = clamp(max(noise / 8.0, dterm / 25.0), 1.0, 2.5)
+        excess = risk - 1.0
+        p_factor = clamp(0.92 - 0.03 * excess, 0.87, 0.92)
+        d_factor = clamp(0.84 - 0.06 * excess, 0.74, 0.84)
+        reasons.append("Severe low-command noise: reduce D first, with a bounded P reduction, then validate mechanically and with a new log.")
+    else:
+        return 1.0, 1.0, reasons
+    if trend.get("classification") == "regressed":
+        p_factor = clamp(p_factor - 0.01, 0.85, 1.0)
+        d_factor = clamp(d_factor - 0.02, 0.70, 1.0)
+        reasons.append("Matched baseline shows a material regression; apply the conservative end of the bounded reduction range.")
+    return round(p_factor, 3), round(d_factor, 3), reasons
+
+
+def evidence_confidence(result: dict, rpm_class: str) -> tuple[str, list[str]]:
+    stable_count = int(result.get("stable_windows", {}).get("count", 0))
+    incidents = sum(len(log.get("incidents", [])) for log in result.get("logs", []))
+    reasons = [f"accepted stable windows={stable_count}", f"RPM telemetry={rpm_class}", f"excluded incidents={incidents}"]
+    if stable_count >= 12 and rpm_class == "confirmed" and incidents == 0:
+        return "high", reasons
+    if stable_count >= 4 and rpm_class == "confirmed":
+        return "medium", reasons
+    return "low", reasons
+
+
+def cli_candidate(
+    headers: dict[str, str],
+    result: dict,
+    emit_notice: bool,
+    baseline: dict | None = None,
+    esc_bidir_confirmed: bool = False,
+) -> tuple[str, dict]:
     severity, reasons = classify(result["stable_windows"])
     supported = firmware_supported(headers)
     rpm_class = result["rpm_telemetry"]["classification"]
@@ -543,13 +629,36 @@ def cli_candidate(headers: dict[str, str], result: dict, emit_notice: bool) -> t
     pitch = parse_triplet(headers.get("pitchPID"))
     yaw = parse_triplet(headers.get("yawPID"))
     dmin = parse_triplet(headers.get("d_min"))
-    applicable = supported and severity != "insufficient_data" and all(x is not None for x in (roll, pitch, yaw, dmin))
+    pid_headers_present = all(x is not None for x in (roll, pitch, yaw, dmin))
+    hardware_protocol = int_header(headers, "motor_pwm_protocol", -1)
+    high_d_ratio = high_throttle_d_ratio(result)
+    trend = baseline_trend(result, baseline)
+    confidence, confidence_reasons = evidence_confidence(result, rpm_class)
+    noise = summary_max(result["stable_windows"], "worst_p90_filtered_40_400_rms_dps") or 0.0
+    dterm = summary_max(result["stable_windows"], "worst_p90_d_rms") or 0.0
+    hard_gate = not supported or severity == "insufficient_data" or not pid_headers_present
+    if hard_gate:
+        mode = "hold"
+    elif rpm_class != "confirmed":
+        mode = "rpm_setup" if esc_bidir_confirmed and hardware_protocol in DSHOT_PROTOCOLS else "rpm_validation"
+    elif severity == "clean":
+        mode = "tpa_only" if high_d_ratio is not None and high_d_ratio >= 2.0 else "retain"
+    else:
+        mode = "noise_reduction"
+    active_cli = mode in {"rpm_setup", "tpa_only", "noise_reduction"}
     decision: dict = {
         "classification": severity,
+        "mode": mode,
         "firmware_supported": supported,
-        "automatic_cli_applicable": applicable,
+        "automatic_cli_applicable": active_cli,
+        "active_cli_emitted": active_cli,
         "rpm_telemetry": rpm_class,
-        "requires_esc_bidirectional_dshot_confirmation": rpm_class != "confirmed",
+        "requires_esc_bidirectional_dshot_confirmation": mode in {"rpm_validation", "rpm_setup"},
+        "confidence": confidence,
+        "confidence_reasons": confidence_reasons,
+        "baseline_trend": trend,
+        "high_throttle_d_ratio": high_d_ratio,
+        "requires_new_bbl": mode != "hold",
         "reasons": reasons,
         "pid_factor": {"p": 1.0, "i": 1.0, "d": 1.0},
         "changed_parameters": [],
@@ -563,7 +672,7 @@ def cli_candidate(headers: dict[str, str], result: dict, emit_notice: bool) -> t
         "# BACK UP FIRST: run 'diff all' and save the output.",
         "# Remove props while applying configuration; use known-good props for flight validation.",
     ]
-    if not applicable:
+    if mode == "hold":
         lines += [
             "# STOP: automatic PID changes were withheld because a hard evidence/version gate failed.",
             "# Capture a normal prop-on flight with gyro, D-term, motor, setpoint, and eRPM fields, then rerun.",
@@ -573,46 +682,91 @@ def cli_candidate(headers: dict[str, str], result: dict, emit_notice: bool) -> t
             lines.append(f"# {COPYRIGHT_NOTICE}")
         return "\n".join(lines) + "\n", decision
 
+    if mode == "rpm_validation":
+        lines += [
+            "# STAGE 1 ONLY: PID and filter changes are withheld until RPM telemetry is confirmed.",
+            "# Confirm ESC bidirectional-DShot support and the actual rotor magnet count, then rerun with --esc-bidir-confirmed.",
+            "# If bidirectional DShot is already configured, log a short prop-on flight with eRPM and RPM_FILTER debug fields.",
+            "# No active tuning commands follow.",
+        ]
+        if emit_notice:
+            lines.append(f"# {COPYRIGHT_NOTICE}")
+        return "\n".join(lines) + "\n", decision
+
+    if mode == "rpm_setup":
+        lines += [
+            "# STAGE 1: ESC compatibility was explicitly confirmed by the operator.",
+            "# This stage only enables/verifies RPM telemetry; it does not change PID or filters.",
+            f"set motor_pwm_protocol = {DSHOT_PROTOCOLS[hardware_protocol]}",
+            "set dshot_bidir = ON",
+            f"set motor_poles = {int_header(headers, 'motor_poles', 14)}",
+            "set rpm_filter_harmonics = 3",
+            "set debug_mode = RPM_FILTER",
+            "# Reboot, check dshot_telemetry_info with props removed, then record a prop-on BBL before further tuning.",
+            "save",
+        ]
+        for name, old, new in (
+            ("dshot_bidir", int_header(headers, "dshot_bidir"), 1),
+            ("rpm_filter_harmonics", int_header(headers, "rpm_filter_harmonics"), 3),
+        ):
+            if old != new:
+                decision["changed_parameters"].append({"name": name, "old": old, "new": new})
+        if emit_notice:
+            lines.append(f"# {COPYRIGHT_NOTICE}")
+        return "\n".join(lines) + "\n", decision
+
+    if mode == "retain":
+        lines += [
+            "# RETAIN: accepted low-command windows are in the clean band and RPM telemetry is confirmed.",
+            "# No PID, filter, TPA, or motor setting change is justified by this log.",
+            "# Keep the current tune; validate motor temperature and the intended flight envelope before another change.",
+            "# No active CLI commands follow.",
+        ]
+        if emit_notice:
+            lines.append(f"# {COPYRIGHT_NOTICE}")
+        return "\n".join(lines) + "\n", decision
+
     assert roll is not None and pitch is not None and yaw is not None and dmin is not None
     p_factor = d_factor = 1.0
-    if severity == "moderate":
-        p_factor, d_factor = 0.95, 0.90
-    elif severity == "severe":
-        p_factor = 0.90
-        d_factor = 0.70 if rpm_class != "confirmed" else 0.80
+    adaptive_reasons: list[str] = []
+    if mode == "noise_reduction":
+        p_factor, d_factor, adaptive_reasons = adaptive_factors(severity, noise, dterm, trend)
     decision["pid_factor"] = {"p": p_factor, "i": 1.0, "d": d_factor}
+    decision["reasons"].extend(adaptive_reasons)
 
     tuned_roll = [scaled(roll[0], p_factor, 1), roll[1], scaled(roll[2], d_factor)]
     tuned_pitch = [scaled(pitch[0], p_factor, 1), pitch[1], scaled(pitch[2], d_factor)]
     tuned_dmin = [scaled(dmin[0], d_factor), scaled(dmin[1], d_factor), dmin[2]]
-    lines += [
-        "",
-        "# Use direct values; do not run 'simplified_tuning apply' after this block.",
-        "set simplified_pids_mode = OFF",
-        "set simplified_dterm_filter = OFF",
-        "set simplified_gyro_filter = OFF",
-        f"set p_roll = {tuned_roll[0]}",
-        f"set i_roll = {tuned_roll[1]}",
-        f"set d_roll = {tuned_roll[2]}",
-        f"set p_pitch = {tuned_pitch[0]}",
-        f"set i_pitch = {tuned_pitch[1]}",
-        f"set d_pitch = {tuned_pitch[2]}",
-        f"set p_yaw = {yaw[0]}",
-        f"set i_yaw = {yaw[1]}",
-        f"set d_yaw = {yaw[2]}",
-        f"set d_min_roll = {tuned_dmin[0]}",
-        f"set d_min_pitch = {tuned_dmin[1]}",
-    ]
-    for key, old, new in (
-        ("p_roll", roll[0], tuned_roll[0]), ("d_roll", roll[2], tuned_roll[2]),
-        ("p_pitch", pitch[0], tuned_pitch[0]), ("d_pitch", pitch[2], tuned_pitch[2]),
-        ("d_min_roll", dmin[0], tuned_dmin[0]), ("d_min_pitch", dmin[1], tuned_dmin[1]),
-    ):
-        if old != new:
-            decision["changed_parameters"].append({"name": key, "old": old, "new": new})
+    if mode == "noise_reduction":
+        lines += [
+            "",
+            "# RPM telemetry is confirmed. Apply one evidence-based noise-reduction stage, then collect a new BBL.",
+            "# Use direct values; do not run 'simplified_tuning apply' after this block.",
+            "set simplified_pids_mode = OFF",
+            "set simplified_dterm_filter = OFF",
+            "set simplified_gyro_filter = OFF",
+            f"set p_roll = {tuned_roll[0]}",
+            f"set i_roll = {tuned_roll[1]}",
+            f"set d_roll = {tuned_roll[2]}",
+            f"set p_pitch = {tuned_pitch[0]}",
+            f"set i_pitch = {tuned_pitch[1]}",
+            f"set d_pitch = {tuned_pitch[2]}",
+            f"set p_yaw = {yaw[0]}",
+            f"set i_yaw = {yaw[1]}",
+            f"set d_yaw = {yaw[2]}",
+            f"set d_min_roll = {tuned_dmin[0]}",
+            f"set d_min_pitch = {tuned_dmin[1]}",
+        ]
+        for key, old, new in (
+            ("p_roll", roll[0], tuned_roll[0]), ("d_roll", roll[2], tuned_roll[2]),
+            ("p_pitch", pitch[0], tuned_pitch[0]), ("d_pitch", pitch[2], tuned_pitch[2]),
+            ("d_min_roll", dmin[0], tuned_dmin[0]), ("d_min_pitch", dmin[1], tuned_dmin[1]),
+        ):
+            if old != new:
+                decision["changed_parameters"].append({"name": key, "old": old, "new": new})
 
-    if severity == "severe":
-        filter_factor = 0.80 if rpm_class == "confirmed" else 0.70
+    if mode == "noise_reduction" and severity == "severe":
+        filter_factor = 0.80
         dterm_dyn = parse_pair(headers.get("dterm_lpf1_dyn_hz"))
         gyro_dyn = parse_pair(headers.get("gyro_lpf1_dyn_hz"))
         dterm2 = int_header(headers, "dterm_lpf2_static_hz")
@@ -630,75 +784,25 @@ def cli_candidate(headers: dict[str, str], result: dict, emit_notice: bool) -> t
         if gyro2:
             lines.append(f"set gyro_lpf2_static_hz = {max(300, scaled(gyro2, 0.85))}")
 
-    lines.append("")
-    if rpm_class == "confirmed":
+    if mode in {"noise_reduction", "tpa_only"} and high_d_ratio is not None and high_d_ratio >= 2.0:
+        old_rate = int_header(headers, "tpa_rate", 0)
+        old_bp = int_header(headers, "tpa_breakpoint", 1350)
+        new_rate, new_bp = max(old_rate, 65), min(old_bp, 1350)
         lines += [
-            "# RPM telemetry is confirmed in the log.",
-            "set dshot_bidir = ON",
-            f"set motor_poles = {int_header(headers, 'motor_poles', 14)}",
-            f"set rpm_filter_harmonics = {max(1, int_header(headers, 'rpm_filter_harmonics', 3))}",
-            "set debug_mode = RPM_FILTER",
+            "",
+            f"# High-throttle D energy is {high_d_ratio:.2f}x the low-command value.",
+            f"set tpa_rate = {new_rate}",
+            f"set tpa_breakpoint = {new_bp}",
         ]
-    else:
-        protocol = int_header(headers, "motor_pwm_protocol", -1)
-        lines += [
-            "# SAFETY GATE: RPM telemetry was not confirmed.",
-            "# Apply the next commands ONLY if the ESC firmware supports bidirectional DShot",
-            "# and motor_poles equals the actual rotor magnet count. Otherwise delete them.",
-        ]
-        if protocol in DSHOT_PROTOCOLS:
-            lines += [
-                f"set motor_pwm_protocol = {DSHOT_PROTOCOLS[protocol]}",
-                "set dshot_bidir = ON",
-                f"set motor_poles = {int_header(headers, 'motor_poles', 14)}",
-                "set rpm_filter_harmonics = 3",
-                "set debug_mode = RPM_FILTER",
-            ]
-        else:
-            lines.append("# Existing protocol is not a recognized DShot mode; no active RPM commands emitted.")
-
-    dyn_count = int_header(headers, "dyn_notch_count", 3)
-    dyn_q = int_header(headers, "dyn_notch_q", 300)
-    dyn_min = int_header(headers, "dyn_notch_min_hz", 60)
-    dyn_max = int_header(headers, "dyn_notch_max_hz", 600)
-    if rpm_class != "confirmed":
-        dyn_count = max(dyn_count, 3)
-        dyn_q = min(max(dyn_q, 200), 300)
-        dyn_min = min(dyn_min or 60, 80)
-        dyn_max = max(dyn_max, 600)
-    lines += [
-        "",
-        "# Dynamic-notch protection",
-        f"set dyn_notch_count = {dyn_count}",
-        f"set dyn_notch_q = {dyn_q}",
-        f"set dyn_notch_min_hz = {dyn_min}",
-        f"set dyn_notch_max_hz = {dyn_max}",
-    ]
-
-    low = result["stable_windows"]
-    high = result["high_throttle_windows"]
-    if high.get("count", 0) and low.get("count", 0):
-        low_d = max(float(value_from_summary(low, a, "worst_p90_d_rms") or 0) for a in ("roll", "pitch"))
-        high_d = max(float(value_from_summary(high, a, "worst_p90_d_rms") or 0) for a in ("roll", "pitch"))
-        if low_d > 0 and high_d / low_d >= 2.0:
-            old_rate = int_header(headers, "tpa_rate", 0)
-            old_bp = int_header(headers, "tpa_breakpoint", 1350)
-            new_rate, new_bp = max(old_rate, 65), min(old_bp, 1350)
-            lines += [
-                "",
-                "# High-throttle D energy is at least 2x the low-throttle value.",
-                f"set tpa_rate = {new_rate}",
-                f"set tpa_breakpoint = {new_bp}",
-            ]
-            if old_rate != new_rate:
-                decision["changed_parameters"].append({"name": "tpa_rate", "old": old_rate, "new": new_rate})
-            if old_bp != new_bp:
-                decision["changed_parameters"].append({"name": "tpa_breakpoint", "old": old_bp, "new": new_bp})
+        if old_rate != new_rate:
+            decision["changed_parameters"].append({"name": "tpa_rate", "old": old_rate, "new": new_rate})
+        if old_bp != new_bp:
+            decision["changed_parameters"].append({"name": "tpa_breakpoint", "old": old_bp, "new": new_bp})
 
     lines += [
         "",
         "# Leave I, feedforward, motor_output_limit, dynamic idle, and thrust_linear unchanged.",
-        "# After reboot, use 'dshot_telemetry_info' with props removed, then make one short prop-on test.",
+        "# After reboot, make one short prop-on test and save a new BBL before the next parameter family.",
         "save",
     ]
     if emit_notice:
@@ -733,6 +837,8 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, help="Directory for decoded files and results")
     parser.add_argument("--attribution", choices=("auto", "on", "off"), default="auto",
                         help="Output attribution: auto reads attribution.json; on/off overrides it")
+    parser.add_argument("--esc-bidir-confirmed", action="store_true",
+                        help="Operator confirms ESC firmware supports bidirectional DShot; permits telemetry-only stage 1 when eRPM is unverified")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir).expanduser().resolve()
@@ -746,9 +852,9 @@ def main() -> None:
     baseline = aggregate(baseline_logs) if baseline_logs else None
     headers = new_logs[0].headers
     emit_notice = attribution_enabled(args.attribution)
-    cli, decision = cli_candidate(headers, current, emit_notice)
+    cli, decision = cli_candidate(headers, current, emit_notice, baseline, args.esc_bidir_confirmed)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "inputs": [str(Path(x).expanduser().resolve()) for x in args.inputs],
         "baseline_inputs": [str(Path(x).expanduser().resolve()) for x in args.baseline],
         "configuration": {
@@ -762,6 +868,7 @@ def main() -> None:
             "pitch_pid": parse_triplet(headers.get("pitchPID")),
             "yaw_pid": parse_triplet(headers.get("yawPID")),
             "d_min": parse_triplet(headers.get("d_min")),
+            "esc_bidir_confirmed_by_operator": args.esc_bidir_confirmed,
         },
         "quality": {
             "firmware_supported_for_automatic_cli": firmware_supported(headers),
