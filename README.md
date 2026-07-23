@@ -7,7 +7,7 @@
 [![Betaflight](https://img.shields.io/badge/Betaflight-4.4%2F4.5-blue)](https://betaflight.com/)
 [![Companion platform](https://img.shields.io/badge/POKRION-companion%20project-7b61ff)](https://github.com/pokrc/POKRION-Speed-Drone)
 
-Give Codex one or more Betaflight Blackbox `.bbl` logs and receive an auditable analysis plus a conservative, staged CLI candidate for PID, D-term/gyro filtering, dynamic notch, RPM filtering, and TPA decisions.
+Give Codex one or more Betaflight Blackbox `.bbl` logs and receive an auditable analysis plus an adaptive CLI stage for PID, D-term/gyro filtering, RPM validation, and TPA decisions.
 
 This tool is designed for real symptoms—resonance, noisy flight sound, hot motors, D-term noise, suspicious RPM filtering, and before/after flight comparisons. It is a decision aid, not a universal preset: every output must be reviewed against the actual frame, propellers, motors, ESC firmware, battery, firmware version, and motor temperature.
 
@@ -16,6 +16,7 @@ This tool is designed for real symptoms—resonance, noisy flight sound, hot mot
 - **Evidence before edits.** Reads firmware, craft/configuration context, stable flight windows, spectra, filtered gyro and D-term RMS, throttle, and motor saturation.
 - **Hard safety gates.** Refuses to imply a tune when the log lacks a stable window, is dominated by impacts/failsafe/landing transients, or falls outside the verified Betaflight 4.4/4.5 family.
 - **RPM proof, not RPM assumptions.** `dshot_bidir = ON` alone is not treated as proof that RPM filtering works; active eRPM and, where available, debug correlation are required.
+- **Adaptive stage selection.** Automatically selects `hold`, `rpm_validation`, `rpm_setup`, `retain`, `tpa_only`, or `noise_reduction` from the available evidence.
 - **Small, explainable steps.** Preserves I-term and feedforward by default and changes one parameter family per short test flight.
 - **Reproducible reports.** Produces machine-readable evidence and a paste-ready candidate with comments, provenance, and the final `save` only when gates pass.
 - **Safe sharing mode.** The distributed copy retains the required POK_RC YAO attribution in generated user-facing output.
@@ -29,6 +30,8 @@ Use $tune-betaflight-pid to analyze this Betaflight .bbl and produce a staged CL
 ```
 
 For the best result, attach the `.bbl`, the relevant `diff all` backup, Betaflight version, board and craft details, motor/propeller/battery information, and a short description of the symptom. A matched baseline log can be supplied for before/after analysis.
+
+The skill automatically chooses the safest supported mode. It does **not** enable bidirectional DShot from a log alone. Supply `--esc-bidir-confirmed` only after independently confirming ESC firmware support and the actual motor-pole count.
 
 ## Command-line workflow
 
@@ -60,12 +63,25 @@ python scripts/analyze_bbl.py flight.bbl --attribution on
 
 The redistributed configuration uses `emit_notice: true`. Do not remove the notice from a redistributed copy without written permission from the rights holder.
 
+## Adaptive output modes
+
+| Mode | What the analyzer does | Active CLI? |
+| --- | --- | --- |
+| `hold` | Stops because a firmware, field, or stable-window gate failed | No |
+| `rpm_validation` | Requires eRPM/RPM-filter evidence before PID/filter work | No |
+| `rpm_setup` | Generates a telemetry-only stage after explicit ESC confirmation | Yes |
+| `retain` | Keeps a clean, RPM-confirmed tune unchanged | No |
+| `tpa_only` | Changes TPA only when high-throttle D energy is at least 2x the low-command value | Yes |
+| `noise_reduction` | Applies one bounded P/D/filter stage for RPM-confirmed noise | Yes |
+
+“Fully automatic” means automatic evidence classification and bounded stage generation. It never raises P/D or filter cutoffs, silently changes motor limits, or combines RPM setup with a PID/filter change.
+
 ## Output contract
 
 | Output | Purpose |
 | --- | --- |
-| `analysis.json` | Provenance, configuration snapshot, quality gates, stable windows, spectra, D-term levels, RPM evidence, motor saturation, incidents, comparison, and decision |
-| `recommended_cli.txt` | A commented, staged Betaflight CLI candidate; when automatic-tuning gates fail, it emits comments and does not pretend that an empty `save` is a tune |
+| `analysis.json` | Provenance, configuration snapshot, quality gates, stable windows, spectra, D-term levels, RPM evidence, motor saturation, incidents, comparison, adaptive mode, confidence, and decision |
+| `recommended_cli.txt` | A commented, single-stage Betaflight CLI candidate; `hold`, `rpm_validation`, and `retain` intentionally contain no active tuning command |
 
 Every report should state:
 
@@ -106,6 +122,8 @@ When a clean log shows a stable tune, the correct recommendation may be **no PID
 - [`tune-betaflight-pid/scripts/analyze_bbl.py`](tune-betaflight-pid/scripts/analyze_bbl.py) — local analyzer
 - [`tune-betaflight-pid/references/decision-rules.md`](tune-betaflight-pid/references/decision-rules.md) — evidence and safety decisions
 - [`tune-betaflight-pid/references/cli-rules.md`](tune-betaflight-pid/references/cli-rules.md) — Betaflight CLI rules and compatibility notes
+- [`tune-betaflight-pid/references/human-tuning-playbook.md`](tune-betaflight-pid/references/human-tuning-playbook.md) — PID principles and the bounded adaptive policy
+- [`tune-betaflight-pid/scripts/self_test.py`](tune-betaflight-pid/scripts/self_test.py) — deterministic tests for all adaptive decision modes
 - [`NOTICE.md`](NOTICE.md) — required attribution notice
 - [`LICENSE.md`](LICENSE.md) — PolyForm Noncommercial terms
 
