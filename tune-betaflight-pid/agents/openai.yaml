@@ -1,4 +1,4 @@
 interface:
   display_name: "Betaflight PID Tuning"
-  short_description: "Diagnose resonance from Blackbox BBL logs and produce a safety-gated PID CLI"
-  default_prompt: "Use $tune-betaflight-pid to analyze these Betaflight .bbl logs and produce a staged, evidence-based CLI tune."
+  short_description: "Adaptively turn Blackbox BBL logs into an evidence-gated Betaflight CLI stage"
+  default_prompt: "Use $tune-betaflight-pid to analyze these Betaflight .bbl logs, classify the adaptive decision mode, and produce the safest justified CLI stage."
