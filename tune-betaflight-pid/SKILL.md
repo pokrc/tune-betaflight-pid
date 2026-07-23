@@ -1,18 +1,18 @@
 ---
 name: tune-betaflight-pid
-description: Analyze Betaflight Blackbox .bbl flight logs and produce a conservative, evidence-based Betaflight CLI for PID, D-term/gyro filtering, dynamic notch, RPM filtering, and TPA. Use when Codex needs to diagnose oscillation, resonance, noisy flight sound, hot motors, single-motor-smooth-but-ARM-shakes behavior, verify bidirectional DShot/RPM filtering, compare a new BBL with a baseline BBL, or turn Blackbox evidence into a staged tuning CLI for Betaflight 4.4/4.5 multirotors.
+description: Analyze Betaflight Blackbox .bbl flight logs and automatically select a conservative, evidence-gated Betaflight CLI stage for PID, D-term/gyro filtering, RPM validation, and TPA. Use when Codex needs to diagnose oscillation, resonance, noisy flight sound, hot motors, single-motor-smooth-but-ARM-shakes behavior, verify bidirectional DShot/RPM filtering, compare a new BBL with a baseline BBL, or turn Blackbox evidence into an adaptive BBL-to-CLI workflow for Betaflight 4.4/4.5 multirotors.
 ---
 
 # Tune Betaflight PID
 
-Turn one or more `.bbl` logs into an auditable analysis and a paste-ready CLI. Treat the generated CLI as a flight-test candidate, not a universal preset.
+Turn one or more `.bbl` logs into an auditable analysis and an adaptive, paste-ready CLI stage. Treat “full automatic” as automatic evidence classification and stage selection—not permission to bypass hardware compatibility, prop-on validation, or motor-temperature checks.
 
 ## Workflow
 
 1. Confirm that props were fitted for the logged flight. Never judge the final PID tune from a prop-less ARM test: the Motors tab is open-loop, while ARM/Airmode closes the gyro-PID-motor feedback loop.
 2. Locate `blackbox_decode`. Prefer an existing executable in `PATH`, the workspace, or a locally built Betaflight Blackbox Tools checkout. Do not download or build it unless the user authorizes that expansion.
 3. Locate a Python runtime with NumPy. In Codex Desktop, call `codex_app__load_workspace_dependencies` when needed; do not install packages into the user's environment without permission.
-4. Run the bundled analyzer:
+4. Run the bundled analyzer. Its default policy is `auto`: it selects `hold`, `rpm_validation`, `rpm_setup`, `retain`, `tpa_only`, or `noise_reduction` from the evidence.
 
    ```bash
    <python-with-numpy> scripts/analyze_bbl.py flight.bbl \
@@ -20,30 +20,42 @@ Turn one or more `.bbl` logs into an auditable analysis and a paste-ready CLI. T
      --output-dir /absolute/path/to/analysis
    ```
 
-   Add `--baseline previous.bbl` for a matched before/after comparison. Pass several new logs positionally when they share the same configuration.
-5. Read `analysis.json` before presenting `recommended_cli.txt`. Inspect `quality`, `rpm_telemetry`, `stable_windows`, `high_throttle_windows`, `incidents`, and `decision`.
+   Add `--baseline previous.bbl` for a matched before/after comparison. Pass several new logs positionally when they share the same configuration. Only pass `--esc-bidir-confirmed` when the operator has independently confirmed compatible ESC firmware and the actual rotor magnet count.
+5. Read `analysis.json` before presenting `recommended_cli.txt`. Inspect `quality`, `rpm_telemetry`, `stable_windows`, `high_throttle_windows`, `incidents`, `comparison`, and `decision.mode`.
 6. Read [references/decision-rules.md](references/decision-rules.md) whenever deciding whether the automatic candidate is safe to apply or needs manual revision.
 7. Read [references/cli-rules.md](references/cli-rules.md) before modifying or presenting the CLI, especially for a firmware version other than Betaflight 4.4/4.5.
-8. Return the CLI together with the evidence that caused each changed parameter. State explicitly when the correct result is “no PID change.”
+8. Read [references/human-tuning-playbook.md](references/human-tuning-playbook.md) before changing the adaptive policy or explaining PID decisions. It encodes bounded human-tuning patterns and automation invariants.
+9. Return the CLI together with the evidence that caused each changed parameter. State explicitly when the correct result is `retain`, `rpm_validation`, or “no PID change.”
+
+## Adaptive modes
+
+- `hold`: no active CLI; one or more hard evidence/version fields failed.
+- `rpm_validation`: no PID/filter edit; first obtain valid RPM evidence.
+- `rpm_setup`: telemetry-only CLI, available only after explicit `--esc-bidir-confirmed`.
+- `retain`: clean accepted windows; no active CLI is the intended output.
+- `tpa_only`: high-throttle D energy is materially worse than matched low-command energy; edit TPA only.
+- `noise_reduction`: RPM-confirmed, accepted low-command noise is moderate/severe; issue one bounded P/D/filter stage and require a new BBL.
 
 ## Hard gates
 
-- Refuse automatic tuning when no stable low-command flight window exists, required gyro/D-term fields are missing, the firmware is outside the verified 4.4/4.5 family, or the log is dominated by impacts/failsafe/landing events.
+- Refuse active automatic tuning when no stable low-command flight window exists, required gyro/D-term fields are missing, the firmware is outside the verified 4.4/4.5 family, or the log is dominated by impacts/failsafe/landing events.
 - Do not enable bidirectional DShot unless the ESC firmware supports it and `motor_poles` is correct. If the log cannot prove this, keep the analyzer's compatibility warning in the handoff.
 - Do not claim RPM filtering works from `dshot_bidir=ON` alone. Require nonzero eRPM during active motor operation; prefer `RPM_FILTER` debug correlation when present.
 - Exclude impacts, prop strikes, and terminal landing transients from steady-flight spectra and heat/PID conclusions. Preserve them as incident findings.
 - Never use `motor_output_limit` as PID “headroom,” never raise dynamic idle merely to hide noise, and never open filters or raise D until RPM telemetry and motor-temperature gates pass.
 - Preserve I and feedforward by default. A vibration-only flight does not provide enough controlled excitation to retune them reliably.
+- Never raise P, D, filter cutoffs, dynamic idle, motor-output limit, thrust linearization, or feedforward automatically. The adaptive policy only emits bounded reductions or a telemetry/TPA stage when evidence supports it.
+- Never combine RPM setup with PID/filter edits in the same generated stage.
 - Change one parameter family per short test flight. Save a backup with `diff all`, remove props for configuration work, then fit known-good props for the actual flight test.
 
 ## Output contract
 
 Produce:
 
-- `analysis.json`: decoded-log provenance, configuration snapshot, quality gates, spectra, D-term levels, motor saturation, RPM telemetry, incidents, comparison, and decision.
-- `recommended_cli.txt`: comments, direct raw PID/filter values, any gated RPM setup, and `save` as the final active command when all automatic-tuning gates pass. When a hard gate fails, emit comments only and do not imply that an empty `save` is a tune.
+- `analysis.json`: decoded-log provenance, configuration snapshot, quality gates, spectra, D-term levels, motor saturation, RPM telemetry, incidents, comparison, decision mode, confidence, baseline trend, and parameter deltas.
+- `recommended_cli.txt`: comments plus exactly one active stage when justified. `hold`, `rpm_validation`, and `retain` intentionally contain no active tuning command. An active stage ends with `save`.
 
-If telemetry is unverified, treat the CLI as stage 1 and require a new BBL before further PID/filter opening. If the new log is clean, retain the current tune and move to temperature and flight-envelope validation instead of forcing another parameter change.
+If telemetry is unverified, emit `rpm_validation` by default. Use `rpm_setup` only after the operator explicitly confirms ESC compatibility. If the new log is clean, emit `retain` and move to temperature and flight-envelope validation instead of forcing another parameter change.
 
 ## Attribution and sharing
 
