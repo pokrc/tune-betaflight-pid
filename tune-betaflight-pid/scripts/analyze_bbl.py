@@ -12,7 +12,6 @@ import csv
 import json
 import math
 import re
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -23,6 +22,8 @@ try:
     import numpy as np
 except ImportError as exc:  # pragma: no cover - exercised only on missing dependency
     raise SystemExit("NumPy is required. Use a Python runtime with NumPy installed.") from exc
+
+from runtime import find_blackbox_decoder
 
 
 AXES = ("roll", "pitch", "yaw")
@@ -64,12 +65,13 @@ def header_path_for(csv_path: Path) -> Path:
     return csv_path.with_name(f"{csv_path.stem}.headers.csv")
 
 
-def locate_decoder(explicit: str | None) -> Path | None:
-    if explicit:
-        path = Path(explicit).expanduser().resolve()
-        return path if path.is_file() else None
-    found = shutil.which("blackbox_decode")
-    return Path(found).resolve() if found else None
+def decoder_search_roots(paths: Iterable[str]) -> list[Path]:
+    """Use only predictable local locations; never recursively scan a disk."""
+    roots = [Path.cwd()]
+    for raw in paths:
+        path = Path(raw).expanduser()
+        roots.append(path if path.is_dir() else path.parent)
+    return roots
 
 
 def attribution_enabled(override: str) -> bool:
@@ -120,7 +122,8 @@ def expand_inputs(paths: Iterable[str], decoder: Path | None, out_dir: Path) -> 
         if path.suffix.lower() == ".bbl":
             if decoder is None:
                 raise RuntimeError(
-                    "No blackbox_decode executable found. Pass --decoder /absolute/path/to/blackbox_decode."
+                    "No blackbox_decode executable found. Run scripts/doctor.py, then pass "
+                    "--decoder /absolute/path/to/blackbox_decode or set BLACKBOX_DECODE."
                 )
             result.extend(decode_bbl(path, decoder, out_dir / path.stem))
         elif path.suffix.lower() == ".csv" and not path.name.endswith(".headers.csv"):
@@ -833,8 +836,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="+", help="New .bbl files or decoded flight .csv files")
     parser.add_argument("--baseline", action="append", default=[], help="Optional baseline .bbl/.csv; repeat for several")
-    parser.add_argument("--decoder", help="Path to blackbox_decode")
+    parser.add_argument("--decoder", help="Optional path to blackbox_decode; otherwise auto-discover locally")
     parser.add_argument("--output-dir", required=True, help="Directory for decoded files and results")
+    parser.add_argument("--print-cli", action="store_true", help="Print the generated CLI to stdout instead of the JSON summary")
     parser.add_argument("--attribution", choices=("auto", "on", "off"), default="auto",
                         help="Output attribution: auto reads attribution.json; on/off overrides it")
     parser.add_argument("--esc-bidir-confirmed", action="store_true",
@@ -843,7 +847,10 @@ def main() -> None:
 
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    decoder = locate_decoder(args.decoder)
+    decoder, decoder_source = find_blackbox_decoder(
+        args.decoder,
+        decoder_search_roots([*args.inputs, *args.baseline]),
+    )
     new_csvs = expand_inputs(args.inputs, decoder, output_dir / "decoded_new")
     baseline_csvs = expand_inputs(args.baseline, decoder, output_dir / "decoded_baseline") if args.baseline else []
     new_logs = [load_csv(path) for path in new_csvs]
@@ -857,6 +864,11 @@ def main() -> None:
         "schema_version": 2,
         "inputs": [str(Path(x).expanduser().resolve()) for x in args.inputs],
         "baseline_inputs": [str(Path(x).expanduser().resolve()) for x in args.baseline],
+        "decoder": {
+            "path": str(decoder) if decoder else None,
+            "discovery": decoder_source,
+            "used_for_bbl_input": any(Path(item).suffix.lower() == ".bbl" for item in [*args.inputs, *args.baseline]),
+        },
         "configuration": {
             "firmware": headers.get("Firmware revision"),
             "board": headers.get("Board information"),
@@ -897,10 +909,14 @@ def main() -> None:
         "active_cli_emitted": decision["active_cli_emitted"],
         "requires_new_bbl": decision["requires_new_bbl"],
         "rpm_telemetry": decision["rpm_telemetry"],
+        "decoder": str(decoder) if decoder else None,
     }
     if emit_notice:
         summary["copyright_notice"] = COPYRIGHT_NOTICE
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if args.print_cli:
+        sys.stdout.write(cli)
+    else:
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
