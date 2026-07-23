@@ -7,7 +7,7 @@
 [![Betaflight](https://img.shields.io/badge/Betaflight-4.4%2F4.5-blue)](https://betaflight.com/)
 [![Companion platform](https://img.shields.io/badge/POKRION-companion%20project-7b61ff)](https://github.com/pokrc/POKRION-Speed-Drone)
 
-Give Codex one or more Betaflight Blackbox `.bbl` logs and receive an auditable analysis plus an adaptive CLI stage for PID, D-term/gyro filtering, RPM validation, and TPA decisions.
+Give Codex one or more Betaflight Blackbox `.bbl` logs and receive an auditable analysis plus an adaptive CLI stage for PID, D-term/gyro filtering, RPM validation, and TPA decisions. Raw `.bbl` input is decoded locally; manual CSV conversion is optional rather than required.
 
 This tool is designed for real symptoms—resonance, noisy flight sound, hot motors, D-term noise, suspicious RPM filtering, and before/after flight comparisons. It is a decision aid, not a universal preset: every output must be reviewed against the actual frame, propellers, motors, ESC firmware, battery, firmware version, and motor temperature.
 
@@ -19,6 +19,7 @@ This tool is designed for real symptoms—resonance, noisy flight sound, hot mot
 - **Adaptive stage selection.** Automatically selects `hold`, `rpm_validation`, `rpm_setup`, `retain`, `tpa_only`, or `noise_reduction` from the available evidence.
 - **Small, explainable steps.** Preserves I-term and feedforward by default and changes one parameter family per short test flight.
 - **Reproducible reports.** Produces machine-readable evidence and a paste-ready candidate with comments, provenance, and the final `save` only when gates pass.
+- **Deployability checks.** Includes a local `doctor` command, automatic decoder discovery, a minimal dependency manifest, and GitHub Actions validation for policy regressions.
 - **Safe sharing mode.** The distributed copy retains the required POK_RC YAO attribution in generated user-facing output.
 
 ## Quick start in Codex
@@ -33,32 +34,53 @@ For the best result, attach the `.bbl`, the relevant `diff all` backup, Betaflig
 
 The skill automatically chooses the safest supported mode. It does **not** enable bidirectional DShot from a log alone. Supply `--esc-bidir-confirmed` only after independently confirming ESC firmware support and the actual motor-pole count.
 
-## Command-line workflow
+## Local deployment
 
-The bundled analyzer needs Python with NumPy and an external `blackbox_decode` executable. If you already have a decoded CSV, the decoder is not needed.
+The analyzer runs locally and does not upload Blackbox logs. It needs Python with NumPy plus the `blackbox_decode` executable from the official [Betaflight Blackbox Tools](https://github.com/betaflight/blackbox-tools) project for raw `.bbl` input. The decoder is intentionally not bundled because it is an external, platform-specific project.
 
 ```bash
+git clone https://github.com/pokrc/tune-betaflight-pid.git
 cd tune-betaflight-pid
-python scripts/analyze_bbl.py flight.bbl \
-  --decoder /absolute/path/to/blackbox_decode \
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+
+# Optional when the decoder is not on PATH: make it discoverable for this shell.
+export BLACKBOX_DECODE=/absolute/path/to/blackbox_decode
+.venv/bin/python tune-betaflight-pid/scripts/doctor.py --require-ready
+```
+
+The commands use the macOS/Linux virtual-environment path; on Windows, use `.venv\\Scripts\\python`. `doctor.py` reports the exact local Python, NumPy version, decoder path, discovery method, and any next action. It does not download software or transmit flight data. Use `--decoder /path/to/blackbox_decode` instead of the environment variable when a per-run override is safer.
+
+## Command-line workflow
+
+After `doctor.py` reports `ready`, the analyzer discovers the decoder through `--decoder`, `BLACKBOX_DECODE`, `PATH`, common local prefixes, or predictable workspace layouts. If you already have decoded CSV input, a decoder is not required.
+
+```bash
+.venv/bin/python tune-betaflight-pid/scripts/analyze_bbl.py flight.bbl \
   --output-dir /absolute/path/to/analysis
 ```
 
 Compare a new flight with a matched baseline:
 
 ```bash
-cd tune-betaflight-pid
-python scripts/analyze_bbl.py new-flight.bbl \
+.venv/bin/python tune-betaflight-pid/scripts/analyze_bbl.py new-flight.bbl \
   --baseline previous-flight.bbl \
-  --decoder /absolute/path/to/blackbox_decode \
   --output-dir /absolute/path/to/analysis
+```
+
+Print the generated CLI directly to standard output when integrating with a local review workflow:
+
+```bash
+.venv/bin/python tune-betaflight-pid/scripts/analyze_bbl.py flight.bbl \
+  --output-dir /absolute/path/to/analysis \
+  --print-cli
 ```
 
 The analyzer supports explicit attribution control for local testing:
 
 ```bash
-python scripts/analyze_bbl.py flight.bbl --attribution auto
-python scripts/analyze_bbl.py flight.bbl --attribution on
+.venv/bin/python tune-betaflight-pid/scripts/analyze_bbl.py flight.bbl --attribution auto
+.venv/bin/python tune-betaflight-pid/scripts/analyze_bbl.py flight.bbl --attribution on
 ```
 
 The redistributed configuration uses `emit_notice: true`. Do not remove the notice from a redistributed copy without written permission from the rights holder.
@@ -80,7 +102,7 @@ The redistributed configuration uses `emit_notice: true`. Do not remove the noti
 
 | Output | Purpose |
 | --- | --- |
-| `analysis.json` | Provenance, configuration snapshot, quality gates, stable windows, spectra, D-term levels, RPM evidence, motor saturation, incidents, comparison, adaptive mode, confidence, and decision |
+| `analysis.json` | Provenance including decoder discovery, configuration snapshot, quality gates, stable windows, spectra, D-term levels, RPM evidence, motor saturation, incidents, comparison, adaptive mode, confidence, and decision |
 | `recommended_cli.txt` | A commented, single-stage Betaflight CLI candidate; `hold`, `rpm_validation`, and `retain` intentionally contain no active tuning command |
 
 Every report should state:
@@ -120,10 +142,14 @@ When a clean log shows a stable tune, the correct recommendation may be **no PID
 
 - [`tune-betaflight-pid/SKILL.md`](tune-betaflight-pid/SKILL.md) — full Codex workflow and output contract
 - [`tune-betaflight-pid/scripts/analyze_bbl.py`](tune-betaflight-pid/scripts/analyze_bbl.py) — local analyzer
+- [`tune-betaflight-pid/scripts/doctor.py`](tune-betaflight-pid/scripts/doctor.py) — local dependency and decoder diagnostic
+- [`tune-betaflight-pid/scripts/runtime.py`](tune-betaflight-pid/scripts/runtime.py) — portable decoder-discovery helper
 - [`tune-betaflight-pid/references/decision-rules.md`](tune-betaflight-pid/references/decision-rules.md) — evidence and safety decisions
 - [`tune-betaflight-pid/references/cli-rules.md`](tune-betaflight-pid/references/cli-rules.md) — Betaflight CLI rules and compatibility notes
 - [`tune-betaflight-pid/references/human-tuning-playbook.md`](tune-betaflight-pid/references/human-tuning-playbook.md) — PID principles and the bounded adaptive policy
 - [`tune-betaflight-pid/scripts/self_test.py`](tune-betaflight-pid/scripts/self_test.py) — deterministic tests for all adaptive decision modes
+- [`requirements.txt`](requirements.txt) — minimal local runtime dependency
+- [validation workflow](.github/workflows/validate.yml) — CI checks for script syntax and decision-policy regression
 - [`NOTICE.md`](NOTICE.md) — required attribution notice
 - [`LICENSE.md`](LICENSE.md) — PolyForm Noncommercial terms
 
