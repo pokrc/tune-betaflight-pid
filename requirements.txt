@@ -1,0 +1,2 @@
+# Runtime dependency for the local Blackbox analysis scripts.
+numpy>=1.24,<3
