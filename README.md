@@ -2,6 +2,15 @@
 
 **An evidence-first Codex skill for turning Betaflight Blackbox data into a reviewable tuning CLI.**
 
+<p align="center">
+  <img src="assets/blackbox-to-cli.svg" alt="Blackbox log to evidence-gated CLI workflow" width="100%">
+</p>
+
+<p align="center">
+  <strong>Raw <code>.bbl</code> → measurable flight evidence → one conservative Betaflight CLI stage.</strong><br>
+  Useful to your FPV workflow? <a href="https://github.com/pokrc/tune-betaflight-pid/stargazers">Star the project</a> so reproducible, data-driven tuning stays easy to find.
+</p>
+
 [![GitHub stars](https://img.shields.io/github/stars/pokrc/tune-betaflight-pid?style=social)](https://github.com/pokrc/tune-betaflight-pid/stargazers)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-orange)](LICENSE.md)
 [![Betaflight](https://img.shields.io/badge/Betaflight-4.4%2F4.5-blue)](https://betaflight.com/)
@@ -22,9 +31,17 @@ This tool is designed for real symptoms—resonance, noisy flight sound, hot mot
 - **Deployability checks.** Includes a local `doctor` command, automatic decoder discovery, a minimal dependency manifest, and GitHub Actions validation for policy regressions.
 - **Safe sharing mode.** The distributed copy retains the required POK_RC YAO attribution in generated user-facing output.
 
-## Quick start in Codex
+## Install in Codex
 
-Copy the `tune-betaflight-pid/` directory into your Codex skills directory, then invoke it with:
+Install the bundled skill directory, then start a new Codex task:
+
+```bash
+git clone --depth 1 https://github.com/pokrc/tune-betaflight-pid.git /tmp/tune-betaflight-pid
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+cp -R /tmp/tune-betaflight-pid/tune-betaflight-pid "${CODEX_HOME:-$HOME/.codex}/skills/"
+```
+
+Then attach a log and use:
 
 ```text
 Use $tune-betaflight-pid to analyze this Betaflight .bbl and produce a staged CLI.
@@ -33,6 +50,19 @@ Use $tune-betaflight-pid to analyze this Betaflight .bbl and produce a staged CL
 For the best result, attach the `.bbl`, the relevant `diff all` backup, Betaflight version, board and craft details, motor/propeller/battery information, and a short description of the symptom. A matched baseline log can be supplied for before/after analysis.
 
 The skill automatically chooses the safest supported mode. It does **not** enable bidirectional DShot from a log alone. RPM setup requires both `--esc-bidir-confirmed` and `--motor-poles-confirmed <bell-magnet-count>` after independently confirming ESC firmware support and counting magnets on the motor bell.
+
+## What a useful result looks like
+
+This project deliberately treats a clean, RPM-confirmed flight as a successful “no change” result instead of inventing a new preset:
+
+```text
+mode: retain
+RPM telemetry: confirmed
+active CLI: no
+reason: current tune is clean in accepted low-command windows
+```
+
+For a noisy flight, the output instead identifies the evidence gate, the small parameter family it is willing to change, and the exact next log required. That makes a recommendation auditable by another pilot rather than dependent on a hidden universal tune.
 
 ## Local deployment
 
@@ -174,7 +204,7 @@ If this skill helps you find resonance, validate RPM filtering, reduce motor hea
 
 <https://github.com/pokrc/tune-betaflight-pid>
 
-Issues and pull requests are welcome. Include Betaflight version, board, relevant hardware, test conditions, log-quality notes, and the smallest reproducible change. Never upload GitHub tokens, receiver identifiers, private flight data, or other credentials.
+Ask workflow questions or share a result in [Discussions](https://github.com/pokrc/tune-betaflight-pid/discussions). Issues and pull requests are welcome; include Betaflight version, board, relevant hardware, test conditions, log-quality notes, and the smallest reproducible change. Never upload GitHub tokens, receiver identifiers, private flight data, or other credentials.
 
 ## License and attribution
 

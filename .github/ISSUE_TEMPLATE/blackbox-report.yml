@@ -1,0 +1,52 @@
+name: Blackbox tuning report
+description: Share a reproducible log finding, analysis issue, or safe workflow improvement.
+title: "[Blackbox]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for contributing. Do not upload tokens, receiver identifiers, GPS coordinates, private video links, or any other credentials.
+  - type: input
+    id: firmware
+    attributes:
+      label: Betaflight version and flight controller
+      placeholder: "Betaflight 4.5.2, SpeedyBee F405 AIO V2"
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Airframe and propulsion
+      placeholder: "Frame, motors, propellers, battery, ESC firmware/protocol"
+    validations:
+      required: true
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: Primary result or symptom
+      options:
+        - Oscillation or resonance
+        - Hot motors or excessive flight sound
+        - RPM telemetry or bidirectional-DShot validation
+        - Unexpected CLI stage or analysis result
+        - Before/after comparison
+        - Documentation or installation improvement
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Safe-to-share evidence
+      description: Include the command, anonymized analysis.json summary, relevant CLI lines, and the smallest reproducible observation.
+      placeholder: "mode, RPM status, stable-window count, expected behavior, actual behavior"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Safety and privacy checklist
+      options:
+        - label: I removed personal identifiers, location data, credentials, and private links.
+          required: true
+        - label: I understand the project provides a reviewable test candidate, not a universal flight preset.
+          required: true
