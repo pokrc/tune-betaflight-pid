@@ -20,6 +20,8 @@ Give Codex one or more Betaflight Blackbox `.bbl` logs and receive an auditable 
 
 This tool is designed for real symptoms—resonance, noisy flight sound, hot motors, D-term noise, suspicious RPM filtering, and before/after flight comparisons. It is a decision aid, not a universal preset: every output must be reviewed against the actual frame, propellers, motors, ESC firmware, battery, firmware version, and motor temperature.
 
+**Other POKRC repositories:** [Project directory — originals, forks and research boundaries](https://github.com/pokrc/POKRION-Speed-Drone/blob/main/PROJECTS.md). This repository is the Blackbox-analysis software companion to [POKRION](https://github.com/pokrc/POKRION-Speed-Drone), not the airframe design repository.
+
 ## What makes it different
 
 - **Evidence before edits.** Reads firmware, craft/configuration context, stable flight windows, spectra, filtered gyro and D-term RMS, throttle, and motor saturation.
