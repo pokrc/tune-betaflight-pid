@@ -1,0 +1,26 @@
+# Python local environments and cache artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local editor / OS artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*~
+*.swp
+
+# Secrets and raw Blackbox flights may contain sensitive device/session metadata
+.env
+.env.*
+!.env.example
+*.bbl
+*.bfl
+# Reviewed, intentionally public test fixtures can be added with git add -f.
